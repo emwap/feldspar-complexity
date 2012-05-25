@@ -1,0 +1,42 @@
+name:           feldspar-complexity
+version:        0.6.0.1
+synopsis:       Complexity analysis of Feldspar programs through program transformation
+description:    Feldspar (Functional Embedded Language for DSP and PARallelism)
+                is an embedded DSL for describing digital signal processing
+                algorithms. This package contains a complexity analysis framework
+                that will transform a Feldspar program to a program that calculates
+                the complexity
+category:       Language
+copyright:      Copyright (c) 2009-2011, ERICSSON AB
+author:         Functional programming group at Chalmers University of Technology
+maintainer:     Emil Axelsson <emax@chalmers.se>
+license:        BSD3
+license-file:   LICENSE
+stability:      experimental
+homepage:       http://feldspar.inf.elte.hu/feldspar/
+build-type:     Simple
+cabal-version:  >= 1.6
+tested-with:    GHC==7.0.2
+
+library
+  exposed-modules:
+    Feldspar.Complexity
+
+  build-depends:
+    mtl >= 2 && < 2.1,
+    base >= 4 && < 4.6,
+    syntactic >= 0.8,
+    feldspar-language >= 0.6
+
+  extensions:
+    TypeOperators
+    FlexibleContexts
+    MultiParamTypeClasses
+    FunctionalDependencies
+    FlexibleInstances
+    TypeFamilies
+    GADTs
+    PatternGuards
+
+  ghc-options: -fcontext-stack=100
+
