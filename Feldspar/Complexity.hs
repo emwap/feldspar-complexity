@@ -1,10 +1,10 @@
 --
 -- Copyright (c) 2012, Anders Persson
 -- All rights reserved.
--- 
+--
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions are met:
--- 
+--
 --     * Redistributions of source code must retain the above copyright notice,
 --       this list of conditions and the following disclaimer.
 --     * Redistributions in binary form must reproduce the above copyright
@@ -13,7 +13,7 @@
 --     * Neither the name of Anders Persson nor the names of other contributors
 --       may be used to endorse or promote products derived from this software
 --       without specific prior written permission.
--- 
+--
 -- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 -- AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
 -- IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -112,25 +112,25 @@ class Count subDomain
                 , Loop :<: domain
                 , Array :<: domain
                 , ORD :<: domain
-                , ConsType a
+                , Signature a
                 )
-             => Sort -> subDomain a -> HList (AST domain) a -> CountM (Sort, ASTF domain WordN)
+             => Sort -> subDomain a -> Args (AST domain) a -> CountM (Sort, ASTF domain WordN)
     countSym = countSymDefault
 
-countSymDefault sort feat args = do (ss,cs) <- liftM unzip $ listHListM (count' sort) args
+countSymDefault sort feat args = do (ss,cs) <- liftM unzip $ sequence $ listArgs (count' sort) args
                                     return (foldr classify Size ss, foldr add zero cs)
 
 instance (Count sub1, Count sub2) => Count (sub1 :+: sub2)
   where
-    countSym sort (InjectL a) args = countSym sort a args
-    countSym sort (InjectR a) args = countSym sort a args
+    countSym sort (InjL a) args = countSym sort a args
+    countSym sort (InjR a) args = countSym sort a args
 
 add :: (NUM :<: dom, Literal TypeCtx :<: dom) => ASTF dom WordN -> ASTF dom WordN -> ASTF dom WordN
 add a b = case (prjCtx typeCtx a, prjCtx typeCtx b) of
             (Just (Literal 0), _               ) -> b
             (_               , Just (Literal 0)) -> a
             (Just (Literal x), Just (Literal y)) -> appSymCtx typeCtx (Literal (x + y))
-            _                                    -> inject Add :$: a :$: b
+            _                                    -> inj Add :$ a :$ b
 
 mul :: (NUM :<: dom) => ASTF dom WordN -> ASTF dom WordN -> ASTF dom WordN
 mul = appSym Mul
@@ -190,7 +190,7 @@ class (Typeable b) => CountTop a b | a -> b
 
 instance (CountTop b c, d ~ (Length -> c)) => CountTop (a -> b) d
   where
-    countTop sort (lam :$: f)
+    countTop sort (lam :$ f)
       | Just (Lambda v) <- prjCtx typeCtx lam
       = do
           (s,body) <- local ((v,Size):) $ countTop sort f
@@ -216,11 +216,11 @@ count a = flip evalState 0 $ flip runReaderT [] $ (countTop Size) a
 
 instance Count NUM
   where
-    countSym sort Add args = do (ss, cs) <- liftM unzip $ listHListM (count' sort) args
+    countSym sort Add args = do (ss, cs) <- liftM unzip $ sequence $ listArgs (count' sort) args
                                 return $ (foldr classify Size ss, foldr add one cs)
-    countSym sort Mul args = do (ss, cs) <- liftM unzip $ listHListM (count' sort) args
+    countSym sort Mul args = do (ss, cs) <- liftM unzip $ sequence $ listArgs (count' sort) args
                                 return $ (foldr classify Size ss, foldr add one cs)
-    countSym sort Sub args = do (ss, cs) <- liftM unzip $ listHListM (count' sort) args
+    countSym sort Sub args = do (ss, cs) <- liftM unzip $ sequence $ listArgs (count' sort) args
                                 return $ (foldr classify Size ss, foldr add one cs)
     countSym sort feat args = countSymDefault sort feat args
 
@@ -230,7 +230,7 @@ instance (Count dom) => Count (Decor Info (Lambda TypeCtx :+: Variable TypeCtx :
 
 instance Count Loop
   where
-    countSym sort ForLoop (len :*: init :*: (lam1 :$: (lam2 :$: body)) :*: Nil)
+    countSym sort ForLoop (len :* init :* (lam1 :$ (lam2 :$ body)) :* Nil)
       | Just (Lambda ix)  <- prjCtx typeCtx lam1
       , Just (Lambda st)  <- prjCtx typeCtx lam2
       = do
@@ -241,45 +241,45 @@ instance Count Loop
             _    -> freshVar
           local ((ix, sl):) $ local ((st,si):) $ do
             (sb, b') <- count' Data body
-            return $ (sl, inject ForLoop
-              :$: l'
-              :$: zero
-              :$: (lambda ix $ lambda state $ (variable state `add` b')))
+            return $ (sl, inj ForLoop
+              :$ l'
+              :$ zero
+              :$ (lambda ix $ lambda state $ (variable state `add` b')))
 
     countSym sort feat args = trace "default Loop" $ countSymDefault sort feat args
 
 instance Count Array
   where
-    countSym sort Parallel (len :*: (lam :$: body) :*: Nil)
+    countSym sort Parallel (len :* (lam :$ body) :* Nil)
       | Just (Lambda ix) <- prjCtx typeCtx lam
       = do
           (sl,l') <- count' Size len
           (sb,b') <- local ((ix,Size):) $ count' Data body
           state <- freshVar
-          return $ (Size,inject ForLoop :$: l' :$: zero :$:
+          return $ (Size,inj ForLoop :$ l' :$ zero :$
             (lambda ix $ lambda state $ (variable state `add` b')))
 
-    countSym Size GetLength (arr :*: Nil)
+    countSym Size GetLength (arr :* Nil)
       | Just (Variable v) <- prjCtx typeCtx arr
       = do
           s <- isSizeVar v
           if s then return (Size, variable v)
                else return (Data, zero)
 
-    countSym Data GetLength (arr :*: Nil)
+    countSym Data GetLength (arr :* Nil)
       = return (Data, zero)
 
-    countSym Size GetIx (arr :*: ix :*: Nil)
+    countSym Size GetIx (arr :* ix :* Nil)
       | Just (Variable a)  <- prjCtx typeCtx arr
       = count' Size ix
-    countSym Data GetIx (arr :*: ix :*: Nil)
+    countSym Data GetIx (arr :* ix :* Nil)
       = return (Data, zero)
 
     countSym sort feat args = trace ("default Array: ") $ countSymDefault sort feat args
 
 instance Count (Let TypeCtx TypeCtx)
   where
-    countSym sort Let (a :*: (lam :$: body) :*: Nil)
+    countSym sort Let (a :* (lam :$ body) :* Nil)
       | Just (Lambda v) <- prjCtx typeCtx lam
       = do
           (sa, a') <- count' sort a
@@ -298,7 +298,7 @@ instance Count (Variable TypeCtx)
 
 instance Count (Condition TypeCtx)
   where
-    countSym sort Condition (c :*: t :*: e :*: Nil)
+    countSym sort Condition (c :* t :* e :* Nil)
       = do
           (sc, c') <- count' Size c
           (st, t') <- count' Data t
