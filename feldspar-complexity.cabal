@@ -23,7 +23,7 @@ library
     Feldspar.Complexity
 
   build-depends:
-    mtl >= 2 && < 2.1,
+    mtl >= 2 && < 2.2,
     base >= 4 && < 4.6,
     syntactic >= 0.8,
     feldspar-language >= 0.6
