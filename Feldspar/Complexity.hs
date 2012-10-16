@@ -1,3 +1,13 @@
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE OverlappingInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
+
 --
 -- Copyright (c) 2012, Anders Persson
 -- All rights reserved.
@@ -26,8 +36,6 @@
 -- OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 --
 
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE OverlappingInstances #-}
 
 module Feldspar.Complexity
 where
@@ -43,6 +51,7 @@ import Control.Monad.State
 import Data.Dynamic
 
 import Language.Syntactic
+import Language.Syntactic.Traversal
 import Language.Syntactic.Constructs.Decoration (stripDecor)
 
 import Feldspar hiding (drawAST, trace, max)
@@ -105,14 +114,13 @@ class Count subDomain
   where
     countSym :: ( Count domain
                 , NUM :<: domain
-                , Literal TypeCtx :<: domain
-                , Variable TypeCtx :<: domain
-                , Lambda TypeCtx :<: domain
-                , Let TypeCtx TypeCtx :<: domain
+                , Literal :<: domain
+                , Variable :<: domain
+                , Lambda :<: domain
+                , Let :<: domain
                 , Loop :<: domain
                 , Array :<: domain
                 , ORD :<: domain
-                , Signature a
                 )
              => Sort -> subDomain a -> Args (AST domain) a -> CountM (Sort, ASTF domain WordN)
     countSym = countSymDefault
@@ -125,63 +133,64 @@ instance (Count sub1, Count sub2) => Count (sub1 :+: sub2)
     countSym sort (InjL a) args = countSym sort a args
     countSym sort (InjR a) args = countSym sort a args
 
-add :: (NUM :<: dom, Literal TypeCtx :<: dom) => ASTF dom WordN -> ASTF dom WordN -> ASTF dom WordN
-add a b = case (prjCtx typeCtx a, prjCtx typeCtx b) of
+add :: (NUM :<: dom, Literal :<: dom)
+    => ASTF dom WordN -> ASTF dom WordN -> ASTF dom WordN
+add a b = case (prj a, prj b) of
             (Just (Literal 0), _               ) -> b
             (_               , Just (Literal 0)) -> a
-            (Just (Literal x), Just (Literal y)) -> appSymCtx typeCtx (Literal (x + y))
+            (Just (Literal x), Just (Literal y)) -> appSym (Literal (x + y))
             _                                    -> inj Add :$ a :$ b
 
 mul :: (NUM :<: dom) => ASTF dom WordN -> ASTF dom WordN -> ASTF dom WordN
 mul = appSym Mul
 
-zero :: (Literal TypeCtx :<: dom) => ASTF dom WordN
-zero = sugarSymCtx typeCtx (Literal 0)
+zero :: (Literal :<: dom) => ASTF dom WordN
+zero = sugarSym (Literal 0)
 
-one :: (Literal TypeCtx :<: dom) => ASTF dom WordN
-one = sugarSymCtx typeCtx (Literal 1)
+one :: (Literal :<: dom) => ASTF dom WordN
+one = sugarSym (Literal 1)
 
-variable :: (Variable TypeCtx :<: dom) => VarId -> ASTF dom WordN
-variable v = appSymCtx typeCtx (Variable v)
+variable :: (Variable :<: dom) => VarId -> ASTF dom WordN
+variable v = appSym (Variable v)
 
 max :: (ORD :<: dom) => ASTF dom WordN -> ASTF dom WordN -> ASTF dom WordN
 max = appSym Max
 
 lambda :: ( Type a
           , Typeable b
-          , Lambda TypeCtx :<: dom
+          , Lambda :<: dom
           )
        => VarId -> ASTF dom b -> ASTF dom (a -> b)
-lambda v = appSymCtx typeCtx (Lambda v)
+lambda v = appSym (Lambda v)
 
 let_ :: ( Type a
         , Type b
-        , Let TypeCtx TypeCtx :<: dom
+        , Let :<: dom
         )
      => ASTF dom a -> ASTF dom (a -> b) -> ASTF dom b
-let_ = appSym (letBind typeCtx)
+let_ = appSym Let
 
 count' :: ( Count dom
           , NUM :<: dom
-          , Literal TypeCtx :<: dom
-          , Variable TypeCtx :<: dom
-          , Lambda TypeCtx :<: dom
-          , Let TypeCtx TypeCtx :<: dom
+          , Literal :<: dom
+          , Variable :<: dom
+          , Lambda :<: dom
+          , Let :<: dom
           , Loop :<: dom
           , Array :<: dom
           , ORD :<: dom
           )
        => Sort -> ASTF dom a -> CountM (Sort, ASTF dom WordN)
-count' sort = queryNodeSimple (countSym sort)
+count' sort = simpleMatch (countSym sort)
 
 class (Typeable b) => CountTop a b | a -> b
   where
     countTop :: ( Count dom
                 , NUM :<: dom
-                , Literal TypeCtx :<: dom
-                , Variable TypeCtx :<: dom
-                , Lambda TypeCtx :<: dom
-                , Let TypeCtx TypeCtx :<: dom
+                , Literal :<: dom
+                , Variable :<: dom
+                , Lambda :<: dom
+                , Let :<: dom
                 , Loop :<: dom
                 , Array :<: dom
                 , ORD :<: dom
@@ -191,48 +200,48 @@ class (Typeable b) => CountTop a b | a -> b
 instance (CountTop b c, d ~ (Length -> c)) => CountTop (a -> b) d
   where
     countTop sort (lam :$ f)
-      | Just (Lambda v) <- prjCtx typeCtx lam
+      | Just (Lambda v) <- prj lam
       = do
           (s,body) <- local ((v,Size):) $ countTop sort f
-          return $ (s, lambda v $ body)
+          return (s, lambda v body)
 
 instance (d ~ WordN) => CountTop a d
   where
-    countTop sort a = count' sort a
+    countTop = count'
 
 count :: ( CountTop a b
          , Count dom
-         , Literal TypeCtx :<: dom
-         , Lambda TypeCtx :<: dom
-         , Variable TypeCtx :<: dom
-         , Let TypeCtx TypeCtx :<: dom
+         , Literal :<: dom
+         , Lambda :<: dom
+         , Variable :<: dom
+         , Let :<: dom
          , Loop :<: dom
          , Array :<: dom
          , NUM :<: dom
          , ORD :<: dom
          )
       => ASTF dom a -> (Sort, ASTF dom b)
-count a = flip evalState 0 $ flip runReaderT [] $ (countTop Size) a
+count a = flip evalState 0 $ flip runReaderT [] $ countTop Size a
 
 instance Count NUM
   where
     countSym sort Add args = do (ss, cs) <- liftM unzip $ sequence $ listArgs (count' sort) args
-                                return $ (foldr classify Size ss, foldr add one cs)
+                                return (foldr classify Size ss, foldr add one cs)
     countSym sort Mul args = do (ss, cs) <- liftM unzip $ sequence $ listArgs (count' sort) args
-                                return $ (foldr classify Size ss, foldr add one cs)
+                                return (foldr classify Size ss, foldr add one cs)
     countSym sort Sub args = do (ss, cs) <- liftM unzip $ sequence $ listArgs (count' sort) args
-                                return $ (foldr classify Size ss, foldr add one cs)
+                                return (foldr classify Size ss, foldr add one cs)
     countSym sort feat args = countSymDefault sort feat args
 
-instance (Count dom) => Count (Decor Info (Lambda TypeCtx :+: Variable TypeCtx :+: dom))
+instance (Count dom) => Count (Decor Info (Lambda :+: Variable :+: dom))
   where
-    countSym sort (Decor _ a) args = countSym sort a args
+    countSym sort (Decor _ a) = countSym sort a 
 
 instance Count Loop
   where
     countSym sort ForLoop (len :* init :* (lam1 :$ (lam2 :$ body)) :* Nil)
-      | Just (Lambda ix)  <- prjCtx typeCtx lam1
-      , Just (Lambda st)  <- prjCtx typeCtx lam2
+      | Just (Lambda ix)  <- prj lam1
+      , Just (Lambda st)  <- prj lam2
       = do
           (sl, l') <- count' Size len
           (si, i') <- count' Size init
@@ -241,26 +250,26 @@ instance Count Loop
             _    -> freshVar
           local ((ix, sl):) $ local ((st,si):) $ do
             (sb, b') <- count' Data body
-            return $ (sl, inj ForLoop
+            return (sl, inj ForLoop
               :$ l'
               :$ zero
-              :$ (lambda ix $ lambda state $ (variable state `add` b')))
+              :$ lambda ix (lambda state (variable state `add` b')))
 
     countSym sort feat args = trace "default Loop" $ countSymDefault sort feat args
 
 instance Count Array
   where
     countSym sort Parallel (len :* (lam :$ body) :* Nil)
-      | Just (Lambda ix) <- prjCtx typeCtx lam
+      | Just (Lambda ix) <- prj lam
       = do
           (sl,l') <- count' Size len
           (sb,b') <- local ((ix,Size):) $ count' Data body
           state <- freshVar
-          return $ (Size,inj ForLoop :$ l' :$ zero :$
-            (lambda ix $ lambda state $ (variable state `add` b')))
+          return (Size,inj ForLoop :$ l' :$ zero :$
+            lambda ix (lambda state (variable state `add` b')))
 
     countSym Size GetLength (arr :* Nil)
-      | Just (Variable v) <- prjCtx typeCtx arr
+      | Just (Variable v) <- prj arr
       = do
           s <- isSizeVar v
           if s then return (Size, variable v)
@@ -270,23 +279,23 @@ instance Count Array
       = return (Data, zero)
 
     countSym Size GetIx (arr :* ix :* Nil)
-      | Just (Variable a)  <- prjCtx typeCtx arr
+      | Just (Variable a)  <- prj arr
       = count' Size ix
     countSym Data GetIx (arr :* ix :* Nil)
       = return (Data, zero)
 
-    countSym sort feat args = trace ("default Array: ") $ countSymDefault sort feat args
+    countSym sort feat args = trace "default Array: " $ countSymDefault sort feat args
 
-instance Count (Let TypeCtx TypeCtx)
+instance Count Let
   where
     countSym sort Let (a :* (lam :$ body) :* Nil)
-      | Just (Lambda v) <- prjCtx typeCtx lam
+      | Just (Lambda v) <- prj lam
       = do
           (sa, a') <- count' sort a
           (sb, b') <- local ((v,sa):) $ count' sort body
-          return $ (sb, a' `add` (let_ zero (lambda v $ b')))
+          return (sb, a' `add` let_ zero (lambda v b'))
 
-instance Count (Variable TypeCtx)
+instance Count Variable
   where
     countSym Size (Variable v) Nil
       = do
@@ -296,16 +305,16 @@ instance Count (Variable TypeCtx)
 
     countSym sort feat args = countSymDefault sort feat args
 
-instance Count (Condition TypeCtx)
+instance Count Condition
   where
     countSym sort Condition (c :* t :* e :* Nil)
       = do
           (sc, c') <- count' Size c
           (st, t') <- count' Data t
           (se, e') <- count' Data e
-          return $ (classify sc (classify st se), c' `add` (max t' e'))
+          return (classify sc (classify st se), c' `add` max t' e')
 
-instance Count (Lambda TypeCtx)
+instance Count Lambda
 instance Count BITS
 instance Count COMPLEX
 instance Count (ConditionM IO)
@@ -315,7 +324,7 @@ instance Count Error
 instance Count FLOATING
 instance Count FRACTIONAL
 instance Count INTEGRAL
-instance Count (Literal TypeCtx)
+instance Count Literal
 instance Count Logic
 instance Count (LoopM IO)
 instance Count (MONAD IO)
@@ -325,7 +334,7 @@ instance Count MutableReference
 instance Count MutableToPure
 instance Count ORD
 instance Count Trace
-instance Count (Tuple TypeCtx)
-instance Count (Select TypeCtx)
+instance Count Tuple
+instance Count Select
 
 
